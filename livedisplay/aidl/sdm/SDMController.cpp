@@ -10,7 +10,9 @@
 #include <android-base/logging.h>
 #include <dlfcn.h>
 
+#include <chrono>
 #include <memory>
+#include <thread>
 
 #define LOAD_SDM_FUNCTION(name) \
     fn_##name##_ = LoadFunction<disp_api_##name>(handle_.get(), "disp_api_" #name);
@@ -43,6 +45,8 @@
 
 namespace {
 constexpr const int kDisplayId = 0;
+constexpr const int kMaxInitAttempts = 25;
+constexpr auto kInitRetryDelay = std::chrono::milliseconds(200);
 
 void* LoadDispApisLib() {
     auto handle = dlopen("libsdm-disp-vndapis.so", RTLD_NOW);
@@ -89,10 +93,19 @@ SDMController::SDMController()
     FOR_EACH_FUNCTION(LOAD_SDM_FUNCTION)
 
     // Initialize SDM backend
-    if (init() != android::OK) {
-        // Terminate the program on failure
-        LOG(FATAL) << "Failed to initialize SDM backend";
+    for (int attempt = 1; attempt <= kMaxInitAttempts; ++attempt) {
+        hctx_ = 0;
+        if (init() == android::OK) {
+            if (attempt > 1) {
+                LOG(INFO) << "Initialized SDM backend after " << attempt << " attempts";
+            }
+            return;
+        }
+        LOG(WARNING) << "Failed to initialize SDM backend on attempt " << attempt;
+        std::this_thread::sleep_for(kInitRetryDelay);
     }
+    // Terminate the program on failure
+    LOG(FATAL) << "Failed to initialize SDM backend";
 }
 
 SDMController::~SDMController() {
